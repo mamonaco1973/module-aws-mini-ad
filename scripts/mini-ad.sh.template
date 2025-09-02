@@ -155,6 +155,8 @@ kdestroy || true
 if ! samba-tool user show Admin >/dev/null 2>&1; then
   samba-tool user create Admin "${ADMIN_USER_PASS}"
   samba-tool group addmembers "Domain Admins" Admin
+  samba-tool user setexpiry Admin --noexpiry
+  samba-tool user setexpiry Administrator --noexpiry
 fi
 
 #--------------------------------------------------------------------
