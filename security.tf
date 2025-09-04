@@ -93,11 +93,21 @@ resource "aws_security_group" "ad_sg" {
   }
 
   # -----------------------------------
-  # HTTPS (TCP 443) – required for AWS SSM connectivity
+  # HTTPS (TCP 443)
   # -----------------------------------
   ingress {
     from_port   = 443
     to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  # -----------------------------------
+  # HTTP (TCP 80)
+  # -----------------------------------
+  ingress {
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
