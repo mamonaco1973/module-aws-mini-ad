@@ -19,15 +19,24 @@ def get_max_value(attr):
             for line in result.splitlines()
             if line.startswith(f"{attr}:")
         ]
-        return max(values) if values else None
+        return max(values) if values else 0
     except Exception as e:
-        return f"Error: {e}"
+        return None
 
-@app.route("/maxids", methods=["GET"])
-def max_ids():
+@app.route("/nextids", methods=["GET"])
+def next_ids():
     max_uid = get_max_value("uidNumber")
     max_gid = get_max_value("gidNumber")
-    return jsonify({"max_uidNumber": max_uid, "max_gidNumber": max_gid})
+
+    next_uid = max_uid + 1 if isinstance(max_uid, int) else None
+    next_gid = max_gid + 1 if isinstance(max_gid, int) else None
+
+    return jsonify({
+        "max_uidNumber": max_uid,
+        "next_uidNumber": next_uid,
+        "max_gidNumber": max_gid,
+        "next_gidNumber": next_gid
+    })
 
 if __name__ == "__main__":
     # Run on all interfaces, port 80

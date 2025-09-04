@@ -30,7 +30,7 @@ chmod 600 /root/seed_users.json
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >> /root/userdata.log 2>&1
-apt-get install -y samba krb5-user winbind smbclient dnsutils acl attr chrony unzip ldb-tools >> /root/userdata.log 2>&1
+apt-get install -y samba krb5-user winbind smbclient dnsutils acl attr chrony unzip ldb-tools python3-flask >> /root/userdata.log 2>&1
 
 #--------------------------------------------------------------------
 # Install AWS CLI
@@ -273,6 +273,18 @@ EOF
         samba-tool group addmembers "$grp" "$USERNAME" >> /root/ad_user_attributes.log 2>&1
     done
 done
+
+#--------------------------------------------------------------------
+# Create utility service for next uid and next gid
+#--------------------------------------------------------------------
+
+cd /
+git clone https://github.com/mamonaco1973/module-aws-mini-ad.git
+cd module-aws-mini-ad/scripts
+cp maxids.service /etc/systemd/system/maxids.service
+sudo systemctl daemon-reload
+sudo systemctl enable maxids
+sudo systemctl start maxids
 
 #--------------------------------------------------------------------
 # Reboot to ensure all changes are applied cleanly

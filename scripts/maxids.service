@@ -8,14 +8,14 @@ User=root
 Group=root
 
 # Path to Python and your script
-ExecStart=/usr/bin/python3 /opt/maxids_service.py
+ExecStart=/module-aws-mini-ad/scripts/maxUidNumber.py
 
 # Restart on failure
 Restart=on-failure
 RestartSec=5s
 
 # Working directory
-WorkingDirectory=/opt
+WorkingDirectory=/module-aws-mini-ad/scripts
 
 [Install]
 WantedBy=multi-user.target
