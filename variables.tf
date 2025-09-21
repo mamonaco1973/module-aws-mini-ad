@@ -34,6 +34,11 @@ variable "ad_admin_password" {
   description = "Password for the AD Administrator and Admin account used in Samba bootstrap."
   type        = string
   sensitive   = true
+
+   validation {
+    condition     = !can(regex("^\\-", var.ad_admin_password))
+    error_message = "The AD admin password cannot start with a dash (-)."
+  }
 }
 
 variable "subnet_id" {
