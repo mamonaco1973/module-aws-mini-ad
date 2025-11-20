@@ -137,6 +137,14 @@ nameserver 169.254.169.253
 EOF
 chattr +i /etc/resolv.conf || true
 
+# --------------------------------------------------------------------
+# ENABLE INSECURE LDAP SIMPLE BINDS
+# (Allows ldapsearch -x -H ldap://<dc>)
+# --------------------------------------------------------------------
+
+sed -i '/^\s*ldap server require strong auth/d' /etc/samba/smb.conf
+sed -i '/^\[global\]/a ldap server require strong auth = no' /etc/samba/smb.conf
+
 #--------------------------------------------------------------------
 # Allow services to stabilize
 #--------------------------------------------------------------------
@@ -237,6 +245,8 @@ jq -c '.users[]' "$SEED_FILE" | while read -r user; do
             --mail-address="$EMAIL" \
             --description="Sample User - $DISPLAYNAME" >> /root/ad_user_attributes.log 2>&1
 
+        samba-tool user setexpiry $USERNAME --noexpiry
+        
         # Add to primary group
         samba-tool group addmembers "$PRIMARY_GROUP" "$USERNAME" >> /root/ad_user_attributes.log 2>&1
 
