@@ -81,7 +81,7 @@ resource "time_sleep" "wait_for_mini_ad" {
 # This causes new DHCP leases to prefer the DC for DNS resolution within the VPC
 # ==================================================================================================
 resource "aws_vpc_dhcp_options_association" "mini_ad_dns_assoc" {
-  count           = var.vpc_id != null && trimspace(var.vpc_id) != "" ? 1 : 0
+  count           = var.dhcp_update ? 1 : 0
   vpc_id          = var.vpc_id
   dhcp_options_id = aws_vpc_dhcp_options.mini_ad_dns.id
   depends_on      = [time_sleep.wait_for_mini_ad]

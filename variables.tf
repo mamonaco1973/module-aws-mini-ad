@@ -56,3 +56,9 @@ variable "users_json" {
   type        = string
   default     = ""
 }
+
+variable "dhcp_update" {
+  description = "Update the dhcp settings for the specified VPC"
+  type        = boolean
+  default     = true
+}
