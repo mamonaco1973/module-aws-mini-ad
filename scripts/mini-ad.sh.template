@@ -10,7 +10,7 @@ trap 'echo "ERROR at line $LINENO"; exit 1' ERR
 
 echo "user-data start: $(date -Is)"
 
-# Terraform-injected inputs (ONLY these use ${...} in the template)
+# Terraform-injected inputs 
 HOSTNAME_DC="${HOSTNAME_DC}"
 DNS_ZONE="${DNS_ZONE}"
 REALM="${REALM}"
