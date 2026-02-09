@@ -73,7 +73,7 @@ resource "aws_vpc_dhcp_options" "mini_ad_dns" {
 # ==================================================================================================
 resource "time_sleep" "wait_for_mini_ad" {
   depends_on      = [aws_instance.mini_ad_dc_instance]
-  create_duration = "180s"
+  create_duration = "300s"
 }
 
 # ==================================================================================================
