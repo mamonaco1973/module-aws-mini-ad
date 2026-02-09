@@ -6,7 +6,7 @@ resource "random_id" "iam_suffix" {
 }
 
 locals {
-  iam_id = "mini-ad-${var.netbios}-${random_id.iam_suffix.hex}"
+  iam_id = "mini-ad-${lower(var.netbios)}-${random_id.iam_suffix.hex}"
 }
 
 # ------------------------------------------------------------------------------
