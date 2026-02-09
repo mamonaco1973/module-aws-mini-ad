@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Log everything (stdout+stderr) to file + instance console
 LOG=/root/userdata.log
 mkdir -p /root
 touch "$LOG"
@@ -11,53 +10,52 @@ trap 'echo "ERROR at line $LINENO"; exit 1' ERR
 
 echo "user-data start: $(date -Is)"
 
-# Input (templated by Terraform/cloud-init)
-REALM="${REALM}"
-DNS_ZONE="${DNS_ZONE}"
-NETBIOS="${NETBIOS}"
+# Terraform-injected inputs (ONLY these use ${...} in the template)
 HOSTNAME_DC="${HOSTNAME_DC}"
+DNS_ZONE="${DNS_ZONE}"
+REALM="${REALM}"
+NETBIOS="${NETBIOS}"
 ADMINISTRATOR_PASS="${ADMINISTRATOR_PASS}"
 ADMIN_USER_PASS="${ADMIN_USER_PASS}"
 
-# Seed JSON payload
 cat > /root/seed_users.json <<'EOF'
 ${USERS_JSON}
 EOF
 chmod 600 /root/seed_users.json
 
-# SSM agent (snap)
+# SSM
 snap install amazon-ssm-agent --classic
 systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
 
-# Base packages needed for Samba DC + seeding
+# Packages
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
   samba krb5-user winbind smbclient dnsutils acl attr chrony unzip \
   ldb-tools jq git python3-flask
 
-# AWS CLI v2
+# AWS CLI
 curl -s https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/aws.zip
 unzip -q /tmp/aws.zip -d /tmp
 /tmp/aws/install --update
 rm -rf /tmp/aws /tmp/aws.zip
 
-# Preserve hostname across cloud-init + set DC hostname
+# Preserve hostname + set hostname
 mkdir -p /etc/cloud/cloud.cfg.d
 echo "preserve_hostname: true" > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
 hostnamectl set-hostname "$HOSTNAME_DC"
 
-# Ensure hostname resolves locally
+# /etc/hosts
 IPV4="$(hostname -I | awk '{print $1}')"
-sed -i "/\b${HOSTNAME_DC}\b/d" /etc/hosts || true
-echo "$IPV4 ${HOSTNAME_DC}.${DNS_ZONE} ${HOSTNAME_DC}" >> /etc/hosts
+sed -i "/\b$HOSTNAME_DC\b/d" /etc/hosts || true
+echo "$IPV4 $HOSTNAME_DC.$DNS_ZONE $HOSTNAME_DC" >> /etc/hosts
 
-# Kerberos preseed (avoid installer prompts)
-debconf-set-selections <<< "krb5-config krb5-config/default_realm string ${REALM}"
+# Kerberos preseed
+debconf-set-selections <<< "krb5-config krb5-config/default_realm string $REALM"
 debconf-set-selections <<< "krb5-config krb5-config/kerberos_servers string"
 debconf-set-selections <<< "krb5-config krb5-config/admin_server string"
 
-# Chrony: sync with AWS time source
+# Chrony (AWS time)
 if ! grep -q "169.254.169.123" /etc/chrony/chrony.conf; then
   sed -i 's/^pool .*//g' /etc/chrony/chrony.conf || true
   cat >> /etc/chrony/chrony.conf <<EOF
@@ -68,11 +66,11 @@ EOF
 fi
 systemctl enable --now chrony
 
-# Stop legacy Samba services (DC uses samba-ad-dc)
+# Stop legacy services (DC uses samba-ad-dc)
 systemctl stop smbd nmbd winbind || true
 systemctl disable smbd nmbd winbind || true
 
-# Provision Samba DC once (idempotent)
+# Provision DC once
 if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   mv /etc/samba/smb.conf /etc/samba/smb.conf.bak 2>/dev/null || true
 
@@ -92,55 +90,54 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   systemctl enable --now samba-ad-dc
 fi
 
-# Manage DNS locally (disable systemd-resolved; pin resolv.conf)
+# Disable systemd-resolved + pin resolv.conf
 systemctl stop systemd-resolved || true
 systemctl disable systemd-resolved || true
 [ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
 
 cat > /etc/resolv.conf <<EOF
-search ${DNS_ZONE}
+search $DNS_ZONE
 nameserver 127.0.0.1
 nameserver 169.254.169.253
 EOF
 chattr +i /etc/resolv.conf || true
 
-# Optional: allow ldapsearch -x against ldap:// (insecure simple binds)
+# Optional insecure LDAP simple binds
 sed -i '/^\s*ldap server require strong auth/d' /etc/samba/smb.conf
 sed -i '/^\[global\]/a ldap server require strong auth = no' /etc/samba/smb.conf
 systemctl restart samba-ad-dc || true
 
-# Give services a moment
 sleep 30
 
-# Quick kerberos sanity check (best-effort)
-kinit "Administrator@${REALM}" <<< "${ADMINISTRATOR_PASS}" || true
+# Kerberos sanity (best-effort)
+kinit "Administrator@$REALM" <<< "$ADMINISTRATOR_PASS" || true
 klist || true
 kdestroy || true
 
-# Create day-to-day Admin user (Domain Admins) if missing
+# Day-to-day Admin user
 if ! samba-tool user show Admin >/dev/null 2>&1; then
-  samba-tool user create Admin "${ADMIN_USER_PASS}"
+  samba-tool user create Admin "$ADMIN_USER_PASS"
   samba-tool group addmembers "Domain Admins" Admin
   samba-tool user setexpiry Admin --noexpiry
   samba-tool user setexpiry Administrator --noexpiry
 fi
 
-# Record key details (restrict file perms)
-SECRETS_FILE="/root/ad-secrets.txt"
+# Write secrets file
+SECRETS_FILE=/root/ad-secrets.txt
 : > "$SECRETS_FILE"
 chmod 600 "$SECRETS_FILE"
 {
   echo "Mini-AD provisioned: $(date -Is)"
-  echo "Realm: ${REALM}"
-  echo "DNS: ${DNS_ZONE}"
-  echo "NetBIOS: ${NETBIOS}"
-  echo "Hostname: ${HOSTNAME_DC}"
-  echo "IP: $${IPV4}"
-  echo "Administrator: ${ADMINISTRATOR_PASS}"
-  echo "Admin: ${ADMIN_USER_PASS}"
+  echo "Realm: $REALM"
+  echo "DNS: $DNS_ZONE"
+  echo "NetBIOS: $NETBIOS"
+  echo "Hostname: $HOSTNAME_DC"
+  echo "IP: $IPV4"
+  echo "Administrator: $ADMINISTRATOR_PASS"
+  echo "Admin: $ADMIN_USER_PASS"
 } >> "$SECRETS_FILE"
 
-# Seed groups/users from JSON (create + RFC2307 attrs)
+# Seed users/groups
 SEED_FILE=/root/seed_users.json
 DNS_ZONE="$(jq -r '.domain.dnsZone' "$SEED_FILE")"
 NETBIOS="$(jq -r '.domain.netbios' "$SEED_FILE")"
@@ -172,8 +169,8 @@ jq -c '.users[]' "$SEED_FILE" | while read -r user; do
   GID_NUMBER="$(echo "$user" | jq -r .gidNumber)"
   PRIMARY_GROUP="$(echo "$user" | jq -r .primaryGroup)"
 
-  DISPLAYNAME="${GIVENNAME} ${SURNAME}"
-  EMAIL="${USERNAME}@${DNS_ZONE}"
+  DISPLAYNAME="$GIVENNAME $SURNAME"
+  EMAIL="$USERNAME@$DNS_ZONE"
 
   if ! samba-tool user show "$USERNAME" >/dev/null 2>&1; then
     echo "user: $USERNAME"
@@ -187,28 +184,28 @@ jq -c '.users[]' "$SEED_FILE" | while read -r user; do
     samba-tool group addmembers "$PRIMARY_GROUP" "$USERNAME" >> /root/ad_user_attributes.log 2>&1
 
     ldbmodify -H /var/lib/samba/private/sam.ldb <<EOF
-dn: CN=${DISPLAYNAME},${USER_BASE_DN}
+dn: CN=$DISPLAYNAME,$USER_BASE_DN
 changetype: modify
 add: objectClass
 objectClass: posixAccount
 -
 replace: uid
-uid: ${USERNAME}
+uid: $USERNAME
 -
 replace: uidNumber
-uidNumber: ${UID_NUMBER}
+uidNumber: $UID_NUMBER
 -
 replace: gidNumber
-gidNumber: ${GID_NUMBER}
+gidNumber: $GID_NUMBER
 -
 replace: loginShell
 loginShell: /bin/bash
 -
 replace: unixHomeDirectory
-unixHomeDirectory: /home/${USERNAME}
+unixHomeDirectory: /home/$USERNAME
 -
 replace: msSFU30NisDomain
-msSFU30NisDomain: ${NETBIOS}
+msSFU30NisDomain: $NETBIOS
 EOF
   fi
 
@@ -218,7 +215,7 @@ EOF
   done
 done
 
-# Install maxids service (idempotent clone)
+# maxids service
 if [ ! -d /root/module-aws-mini-ad ]; then
   git clone https://github.com/mamonaco1973/module-aws-mini-ad.git /root/module-aws-mini-ad
 fi
