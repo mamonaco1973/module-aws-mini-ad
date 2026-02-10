@@ -10,6 +10,17 @@ trap 'echo "ERROR at line $LINENO"; exit 1' ERR
 
 echo "user-data start: $(date -Is)"
 
+# Insure network connectivity
+for i in {1..60}; do
+  echo "checking network"
+  if getent hosts awscli.amazonaws.com >/dev/null 2>&1 && \
+     curl -fsS --max-time 5 https://awscli.amazonaws.com/ >/dev/null 2>&1; then
+    echo "network ready after $((i*5))s"
+    break
+  fi
+  sleep 5
+done
+
 # Terraform-injected inputs 
 HOSTNAME_DC="${HOSTNAME_DC}"
 DNS_ZONE="${DNS_ZONE}"
