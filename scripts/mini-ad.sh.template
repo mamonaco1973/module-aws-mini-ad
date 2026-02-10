@@ -216,12 +216,18 @@ EOF
 done
 
 # maxids service
-if [ ! -d /root/module-aws-mini-ad ]; then
-  git clone https://github.com/mamonaco1973/module-aws-mini-ad.git /root/module-aws-mini-ad
+cd /
+
+if [ ! -d "/module-aws-mini-ad" ]; then
+  git clone "https://github.com/mamonaco1973/module-aws-mini-ad.git"
 fi
-cp /root/module-aws-mini-ad/scripts/maxids.service /etc/systemd/system/maxids.service
+
+cd "/module-aws-mini-ad/scripts"
+cp "maxids.service" "/etc/systemd/system/maxids.service"
+
 systemctl daemon-reload
-systemctl enable --now maxids
+systemctl enable "maxids"
+systemctl start "maxids"
 
 echo "user-data complete: $(date -Is)"
 reboot
