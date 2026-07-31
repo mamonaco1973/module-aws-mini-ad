@@ -1,8 +1,13 @@
 #!/usr/bin/python3
-from flask import Flask, jsonify
+from flask import Flask, jsonify, Response
 import subprocess
 
 app = Flask(__name__)
+
+# Path to Samba's auto-generated CA cert. This is PUBLIC (it only lets a client
+# verify the DC's LDAPS cert), so it is safe to serve unauthenticated — clients
+# fetch it at boot to trust ldaps:// for SSSD ldap-provider integration.
+CA_PEM_PATH = "/var/lib/samba/private/tls/ca.pem"
 
 def get_max_value(attr):
     try:
@@ -37,6 +42,17 @@ def next_ids():
         "max_gidNumber": max_gid,
         "next_gidNumber": next_gid
     })
+
+@app.route("/ca.pem", methods=["GET"])
+def ca_pem():
+    # Serve Samba's public CA cert so LDAP-mode clients can trust ldaps://.
+    try:
+        with open(CA_PEM_PATH, "r") as f:
+            return Response(f.read(), mimetype="application/x-pem-file")
+    except Exception:
+        return Response("ca.pem not available\n", status=503,
+                        mimetype="text/plain")
+
 
 if __name__ == "__main__":
     # Run on all interfaces, port 80
