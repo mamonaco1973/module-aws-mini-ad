@@ -5,11 +5,11 @@ output "dns_server" {
 }
 
 output "ready" {
-  description = "Resolves once the DC has finished bootstrapping (after the sleep or the sentinel). Use in depends_on."
-  value       = local.sentinel_enabled ? terraform_data.wait_for_sentinel[0].id : time_sleep.wait_for_mini_ad[0].id
+  description = "Resolves once the DC has reported ready. Use in depends_on."
+  value       = terraform_data.wait_for_sentinel.id
 }
 
 output "sentinel_parameter" {
-  description = "SSM parameter the DC reports bootstrap status to (null when wait_strategy = \"sleep\")."
-  value       = local.sentinel_enabled ? aws_ssm_parameter.sentinel[0].name : null
+  description = "SSM parameter the DC reports bootstrap status to."
+  value       = aws_ssm_parameter.sentinel.name
 }

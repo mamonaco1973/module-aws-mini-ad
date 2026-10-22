@@ -1,7 +1,7 @@
 # ==================================================================================================
-# Sentinel wait (wait_strategy = "sentinel")
+# Sentinel wait
 # Purpose:
-#   - Replace the fixed 300 s sleep with a wait on the DC's own status report
+#   - Wait on the DC's own status report rather than a fixed sleep
 #   - Fail the apply quickly, with the failing line, when the bootstrap aborts
 #
 # Flow:
@@ -12,15 +12,17 @@
 #      and LDAP, then writes ready:<id>.
 #   4. terraform_data.wait_for_sentinel polls until it sees ready:<id> or
 #      failed:<id> for THIS instance; a predecessor's status never matches.
+#
+# A DC launched before the parameter existed (a deployment that predates the
+# sentinel) never runs the reporting code, since cloud-init runs user data
+# once. The poller detects that case and passes straight through.
 # ==================================================================================================
 
 locals {
-  sentinel_enabled = var.wait_strategy == "sentinel"
-  sentinel_param   = "/mini-ad/${var.netbios}/status"
+  sentinel_param = "/mini-ad/${var.netbios}/status"
 }
 
 resource "aws_ssm_parameter" "sentinel" {
-  count       = local.sentinel_enabled ? 1 : 0
   name        = local.sentinel_param
   description = "Bootstrap status of the mini-ad domain controller for ${var.dns_zone}"
   type        = "String"
@@ -41,15 +43,14 @@ resource "aws_ssm_parameter" "sentinel" {
 # - triggers_replace re-runs the wait whenever the instance is replaced.
 # ==================================================================================================
 resource "terraform_data" "wait_for_sentinel" {
-  count            = local.sentinel_enabled ? 1 : 0
   triggers_replace = [aws_instance.mini_ad_dc_instance.id]
 
   provisioner "local-exec" {
     command = "bash '${path.module}/scripts/wait-for-sentinel.sh'"
 
     environment = {
-      PARAM       = aws_ssm_parameter.sentinel[0].name
-      REGION      = split(":", aws_ssm_parameter.sentinel[0].arn)[3]
+      PARAM       = aws_ssm_parameter.sentinel.name
+      REGION      = split(":", aws_ssm_parameter.sentinel.arn)[3]
       INSTANCE_ID = aws_instance.mini_ad_dc_instance.id
       TIMEOUT     = var.sentinel_timeout
     }

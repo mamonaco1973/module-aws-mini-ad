@@ -28,7 +28,7 @@ It’s designed for **labs, demos, and development environments** where you need
 - `outputs.tf` — Outputs (e.g., IP, domain name)  
 - `scripts/mini-ad.sh.template` — Bootstrap script for Samba DC  
 - `scripts/users.json.template` — Example users and groups  
-- `sentinel.tf` — Optional sentinel wait (`wait_strategy = "sentinel"`)  
+- `sentinel.tf` — Waits for the DC to report ready (see Sentinel Wait)  
 - `scripts/wait-for-sentinel.sh` — Sentinel poller, run locally by Terraform  
 
 ---
@@ -83,8 +83,7 @@ terraform apply
 | `vpc_id`            | string | —          | ID of the VPC where the AD DC will be deployed and DHCP option set updated. |
 | `users_json`        | string | `""`       | Pre-rendered JSON string containing user account definitions (from `users.json.template`). |
 | `dhcp_update`       | bool   | `true`     | Associate a DHCP option set pointing the VPC's DNS at the DC. |
-| `wait_strategy`     | string | `sleep`    | `sleep` waits a fixed 300 s for the bootstrap; `sentinel` waits on the DC's own status report (see below). |
-| `sentinel_timeout`  | number | `1200`     | Seconds the `sentinel` wait allows before failing the apply. |
+| `sentinel_timeout`  | number | `1200`     | Seconds to wait for the DC to report ready before failing the apply. |
 
 ---
 
@@ -92,15 +91,14 @@ terraform apply
 
 - `dns_server` — Active Directory DNS hostname  
 - `ready` — resolves once the DC has finished bootstrapping; use it in `depends_on`  
-- `sentinel_parameter` — SSM parameter holding the bootstrap status (`null` with `wait_strategy = "sleep"`)  
+- `sentinel_parameter` — SSM parameter holding the bootstrap status  
 
 ---
 
 ## Sentinel Wait
 
-By default the module sleeps a fixed 300 s before associating the DHCP options,
-whether the DC took two minutes or failed outright. Set
-`wait_strategy = "sentinel"` to wait on the DC's own report instead:
+Rather than sleeping a fixed time, the module waits for the DC to report that
+it is actually done - and fails the apply at once if the bootstrap aborts:
 
 1. Terraform creates the SSM parameter `/mini-ad/<netbios>/status` with the value `pending`.
 2. The bootstrap script writes milestones (`progress:<instance-id>:<stage>`), or
@@ -117,12 +115,31 @@ command as written (`"$PASSWORD"`), never the expanded value.
 
 Requirements and limits:
 
-- The machine running Terraform needs `bash` and the AWS CLI with
-  `ssm:GetParameter` on the parameter.
+- The machine running Terraform needs `bash` and the AWS CLI, with
+  `ssm:GetParameter`, `ssm:GetParameterHistory` and `ec2:DescribeInstances`.
 - A failure before the bootstrap installs the AWS CLI cannot be reported;
   the wait then fails at `sentinel_timeout` instead.
-- `sleep` remains the default and renders the same user-data as before, so
-  existing deployments see no change until they opt in.
+- A DC launched before its status parameter existed - a deployment created
+  with an earlier version of this module - never runs the reporting code
+  (cloud-init runs user data once). The wait detects this and passes
+  straight through.
+
+## Changes Ignored on a Running DC
+
+The DC instance ignores changes to `ami` and `user_data`:
+
+- **`ami`** tracks Canonical's *current* Ubuntu 24.04 image, so without this
+  every Ubuntu release would replace the DC - a brand-new domain that orphans
+  every machine joined to the old one.
+- **`user_data`** runs once, on first boot. Changing it on a running DC only
+  stops and starts the instance; the script never runs again. Seed users and
+  passwords therefore apply only to a new DC.
+
+To rebuild the DC deliberately with the current image and script:
+
+```bash
+terraform apply -replace='module.mini_ad.aws_instance.mini_ad_dc_instance'
+```
 
 ---
 

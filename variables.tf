@@ -35,7 +35,7 @@ variable "ad_admin_password" {
   type        = string
   sensitive   = true
 
-   validation {
+  validation {
     condition     = !can(regex("^\\-", var.ad_admin_password))
     error_message = "The AD admin password cannot start with a dash (-)."
   }
@@ -63,27 +63,8 @@ variable "dhcp_update" {
   default     = true
 }
 
-variable "wait_strategy" {
-  description = <<-EOT
-    How Terraform waits for the DC to finish bootstrapping before associating
-    the VPC DHCP options:
-      "sleep"    - fixed 300 s wait (original behaviour, the default).
-      "sentinel" - poll an SSM parameter the DC writes; finishes as soon as
-                   Samba answers after the final reboot, and fails fast with
-                   the failing line if the bootstrap aborts. Requires bash
-                   and the AWS CLI on the machine running Terraform.
-  EOT
-  type        = string
-  default     = "sleep"
-
-  validation {
-    condition     = contains(["sleep", "sentinel"], var.wait_strategy)
-    error_message = "wait_strategy must be \"sleep\" or \"sentinel\"."
-  }
-}
-
 variable "sentinel_timeout" {
-  description = "Seconds to wait for the sentinel to report ready before failing (wait_strategy = \"sentinel\" only)."
+  description = "Seconds to wait for the DC to report ready before failing the apply."
   type        = number
   default     = 1200
 }

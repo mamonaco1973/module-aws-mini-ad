@@ -46,11 +46,23 @@ resource "aws_instance" "mini_ad_dc_instance" {
     ADMINISTRATOR_PASS = var.ad_admin_password
     ADMIN_USER_PASS    = var.ad_admin_password
     USERS_JSON         = local.effective_users_json
-    SENTINEL_PARAM     = local.sentinel_enabled ? local.sentinel_param : ""
+    SENTINEL_PARAM     = local.sentinel_param
   })
 
   # The DC overwrites the sentinel parameter, so it must exist first.
   depends_on = [aws_ssm_parameter.sentinel]
+
+  # Neither change can reach a running DC usefully:
+  #   - ami: data.aws_ami tracks Canonical's *current* 24.04 image, so every
+  #     Ubuntu release would otherwise replace the DC - a brand-new domain
+  #     that orphans every machine joined to the old one.
+  #   - user_data: cloud-init runs it once per instance. An edit only buys a
+  #     stop/start (a domain outage) and never re-runs the script.
+  # Both apply to a new DC. To rebuild one deliberately:
+  #   terraform apply -replace=module.<name>.aws_instance.mini_ad_dc_instance
+  lifecycle {
+    ignore_changes = [ami, user_data]
+  }
 
   tags = {
     Name = "mini-ad-dc-${lower(var.netbios)}"
@@ -72,24 +84,6 @@ resource "aws_vpc_dhcp_options" "mini_ad_dns" {
 }
 
 # ==================================================================================================
-# Delay to allow the DC to finish provisioning (Samba/DNS up) before associating DHCP options
-# Adjust duration to your bootstrap time. Used only with wait_strategy = "sleep";
-# "sentinel" replaces it with sentinel.tf.
-# ==================================================================================================
-resource "time_sleep" "wait_for_mini_ad" {
-  count           = local.sentinel_enabled ? 0 : 1
-  depends_on      = [aws_instance.mini_ad_dc_instance]
-  create_duration = "300s"
-}
-
-# Keeps existing deployments from replacing (and re-running) the sleep now
-# that it is counted.
-moved {
-  from = time_sleep.wait_for_mini_ad
-  to   = time_sleep.wait_for_mini_ad[0]
-}
-
-# ==================================================================================================
 # Associate the custom DHCP options with the VPC once the DC is up
 # This causes new DHCP leases to prefer the DC for DNS resolution within the VPC
 # ==================================================================================================
@@ -97,7 +91,7 @@ resource "aws_vpc_dhcp_options_association" "mini_ad_dns_assoc" {
   count           = var.dhcp_update ? 1 : 0
   vpc_id          = var.vpc_id
   dhcp_options_id = aws_vpc_dhcp_options.mini_ad_dns.id
-  depends_on      = [time_sleep.wait_for_mini_ad, terraform_data.wait_for_sentinel]
+  depends_on      = [terraform_data.wait_for_sentinel]
 }
 
 # ==========================================================================================

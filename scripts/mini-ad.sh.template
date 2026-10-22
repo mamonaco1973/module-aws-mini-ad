@@ -6,15 +6,13 @@ mkdir -p /root
 touch "$LOG"
 chmod 600 "$LOG"
 exec > >(tee -a "$LOG" | logger -t user-data -s 2>/dev/console) 2>&1
-trap 'echo "ERROR at line $LINENO"; exit 1' ERR
-%{ if SENTINEL_PARAM != "" ~}
 
 # ------------------------------------------------------------------------------
 # Sentinel: report bootstrap status to an SSM parameter
 # ------------------------------------------------------------------------------
-# Terraform polls the parameter instead of sleeping (wait_strategy =
-# "sentinel"). Every value carries this instance's ID so a replaced DC can
-# never satisfy the wait with its predecessor's status:
+# Terraform polls the parameter to know when the DC is done (sentinel.tf).
+# Every value carries this instance's ID so a replaced DC can never satisfy
+# the wait with its predecessor's status:
 #   progress:<id>:<stage>   bootstrap milestone
 #   failed:<id>:<detail>    bootstrap aborted (first failure wins)
 #   ready:<id>              Samba answering after the final reboot
@@ -54,7 +52,6 @@ sentinel_fail() {
 
 set -E
 trap 'sentinel_fail "$LINENO" "$BASH_COMMAND"' ERR
-%{ endif ~}
 
 echo "user-data start: $(date -Is)"
 
@@ -99,10 +96,8 @@ unzip -q /tmp/aws.zip -d /tmp
 /tmp/aws/install --update
 rm -rf /tmp/aws /tmp/aws.zip
 
-%{ if SENTINEL_PARAM != "" ~}
 sentinel "progress:$INSTANCE_ID:packages-installed"
 
-%{ endif ~}
 # Preserve hostname + set hostname
 mkdir -p /etc/cloud/cloud.cfg.d
 echo "preserve_hostname: true" > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
@@ -152,10 +147,8 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
   systemctl enable --now samba-ad-dc
 fi
-%{ if SENTINEL_PARAM != "" ~}
 
 sentinel "progress:$INSTANCE_ID:domain-provisioned"
-%{ endif ~}
 
 # Disable systemd-resolved + pin resolv.conf
 systemctl stop systemd-resolved || true
@@ -282,10 +275,8 @@ EOF
   done
 done
 
-%{ if SENTINEL_PARAM != "" ~}
 sentinel "progress:$INSTANCE_ID:users-seeded"
 
-%{ endif ~}
 # maxids service
 cd /
 
@@ -300,7 +291,6 @@ systemctl daemon-reload
 systemctl enable "maxids"
 systemctl start "maxids"
 
-%{ if SENTINEL_PARAM != "" ~}
 # ------------------------------------------------------------------------------
 # Sentinel: report "ready" after the final reboot
 # ------------------------------------------------------------------------------
@@ -365,6 +355,5 @@ systemctl daemon-reload
 systemctl enable mini-ad-ready.service
 sentinel "progress:$INSTANCE_ID:rebooting"
 
-%{ endif ~}
 echo "user-data complete: $(date -Is)"
 reboot
