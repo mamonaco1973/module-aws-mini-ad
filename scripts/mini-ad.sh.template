@@ -7,6 +7,54 @@ touch "$LOG"
 chmod 600 "$LOG"
 exec > >(tee -a "$LOG" | logger -t user-data -s 2>/dev/console) 2>&1
 trap 'echo "ERROR at line $LINENO"; exit 1' ERR
+%{ if SENTINEL_PARAM != "" ~}
+
+# ------------------------------------------------------------------------------
+# Sentinel: report bootstrap status to an SSM parameter
+# ------------------------------------------------------------------------------
+# Terraform polls the parameter instead of sleeping (wait_strategy =
+# "sentinel"). Every value carries this instance's ID so a replaced DC can
+# never satisfy the wait with its predecessor's status:
+#   progress:<id>:<stage>   bootstrap milestone
+#   failed:<id>:<detail>    bootstrap aborted (first failure wins)
+#   ready:<id>              Samba answering after the final reboot
+SENTINEL_PARAM="${SENTINEL_PARAM}"
+
+IMDS_TOKEN="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)"
+imds() {
+  curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
+INSTANCE_ID="$(imds instance-id || echo unknown)"
+SENTINEL_REGION="$(imds placement/region || echo us-east-1)"
+
+# Best effort: the AWS CLI is installed partway through this script, so a
+# failure before that point cannot be reported and Terraform times out.
+sentinel() {
+  command -v aws >/dev/null 2>&1 || return 0
+  aws ssm put-parameter --region "$SENTINEL_REGION" --name "$SENTINEL_PARAM" \
+    --overwrite --value "$1" >/dev/null 2>&1 || true
+}
+
+# BASH_COMMAND holds the command as written, before expansion, so a failing
+# samba-tool line reports "$PASSWORD" literally, never the password itself.
+sentinel_fail() {
+  local line="$1" cmd="$2"
+  # With set -E the trap also fires in each parent shell; report only the
+  # innermost (first) failure.
+  if [ -f /root/.mini-ad-failed ]; then
+    exit 1
+  fi
+  touch /root/.mini-ad-failed
+  echo "ERROR at line $line: $cmd"
+  sentinel "failed:$INSTANCE_ID:line $line: $(printf '%s' "$cmd" | head -c 300)"
+  exit 1
+}
+
+set -E
+trap 'sentinel_fail "$LINENO" "$BASH_COMMAND"' ERR
+%{ endif ~}
 
 echo "user-data start: $(date -Is)"
 
@@ -51,6 +99,10 @@ unzip -q /tmp/aws.zip -d /tmp
 /tmp/aws/install --update
 rm -rf /tmp/aws /tmp/aws.zip
 
+%{ if SENTINEL_PARAM != "" ~}
+sentinel "progress:$INSTANCE_ID:packages-installed"
+
+%{ endif ~}
 # Preserve hostname + set hostname
 mkdir -p /etc/cloud/cloud.cfg.d
 echo "preserve_hostname: true" > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
@@ -100,6 +152,10 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
   cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
   systemctl enable --now samba-ad-dc
 fi
+%{ if SENTINEL_PARAM != "" ~}
+
+sentinel "progress:$INSTANCE_ID:domain-provisioned"
+%{ endif ~}
 
 # Disable systemd-resolved + pin resolv.conf
 systemctl stop systemd-resolved || true
@@ -226,6 +282,10 @@ EOF
   done
 done
 
+%{ if SENTINEL_PARAM != "" ~}
+sentinel "progress:$INSTANCE_ID:users-seeded"
+
+%{ endif ~}
 # maxids service
 cd /
 
@@ -240,5 +300,71 @@ systemctl daemon-reload
 systemctl enable "maxids"
 systemctl start "maxids"
 
+%{ if SENTINEL_PARAM != "" ~}
+# ------------------------------------------------------------------------------
+# Sentinel: report "ready" after the final reboot
+# ------------------------------------------------------------------------------
+# This script ends in a reboot, so it cannot truthfully report ready itself.
+# A one-shot unit runs on the next boot, waits until Samba answers DNS and
+# LDAP, reports, and disables itself.
+cat > /etc/mini-ad-ready.env <<EOF
+PARAM=$SENTINEL_PARAM
+REGION=$SENTINEL_REGION
+INSTANCE_ID=$INSTANCE_ID
+DNS_ZONE=$DNS_ZONE
+EOF
+
+cat > /usr/local/sbin/mini-ad-ready.sh <<'EOF'
+#!/bin/bash
+set -uo pipefail
+. /etc/mini-ad-ready.env
+
+report() {
+  for attempt in 1 2 3; do
+    aws ssm put-parameter --region "$REGION" --name "$PARAM" \
+      --overwrite --value "$1" >/dev/null && return 0
+    sleep 5
+  done
+  return 1
+}
+
+for i in $(seq 1 60); do
+  if dig @127.0.0.1 +short SRV "_ldap._tcp.$DNS_ZONE" | grep -q . \
+     && (exec 3<>/dev/tcp/127.0.0.1/389) 2>/dev/null \
+     && samba-tool user show Administrator >/dev/null 2>&1; then
+    echo "mini-ad-ready: samba answering after $((i * 5))s"
+    report "ready:$INSTANCE_ID"
+    systemctl disable mini-ad-ready.service
+    exit 0
+  fi
+  sleep 5
+done
+
+echo "mini-ad-ready: samba not answering 5 minutes after reboot"
+report "failed:$INSTANCE_ID:samba not answering DNS/LDAP 5 minutes after reboot"
+systemctl disable mini-ad-ready.service
+exit 1
+EOF
+chmod 0755 /usr/local/sbin/mini-ad-ready.sh
+
+cat > /etc/systemd/system/mini-ad-ready.service <<'EOF'
+[Unit]
+Description=Mini-AD readiness report (one-shot, post-bootstrap)
+After=samba-ad-dc.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mini-ad-ready.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable mini-ad-ready.service
+sentinel "progress:$INSTANCE_ID:rebooting"
+
+%{ endif ~}
 echo "user-data complete: $(date -Is)"
 reboot

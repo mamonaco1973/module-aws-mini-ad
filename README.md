@@ -28,6 +28,8 @@ It’s designed for **labs, demos, and development environments** where you need
 - `outputs.tf` — Outputs (e.g., IP, domain name)  
 - `scripts/mini-ad.sh.template` — Bootstrap script for Samba DC  
 - `scripts/users.json.template` — Example users and groups  
+- `sentinel.tf` — Optional sentinel wait (`wait_strategy = "sentinel"`)  
+- `scripts/wait-for-sentinel.sh` — Sentinel poller, run locally by Terraform  
 
 ---
 
@@ -80,12 +82,47 @@ terraform apply
 | `subnet_id`         | string | —          | ID of the subnet where the EC2 instance will be attached. |
 | `vpc_id`            | string | —          | ID of the VPC where the AD DC will be deployed and DHCP option set updated. |
 | `users_json`        | string | `""`       | Pre-rendered JSON string containing user account definitions (from `users.json.template`). |
+| `dhcp_update`       | bool   | `true`     | Associate a DHCP option set pointing the VPC's DNS at the DC. |
+| `wait_strategy`     | string | `sleep`    | `sleep` waits a fixed 300 s for the bootstrap; `sentinel` waits on the DC's own status report (see below). |
+| `sentinel_timeout`  | number | `1200`     | Seconds the `sentinel` wait allows before failing the apply. |
 
 ---
 
 ## Outputs
 
 - `dns_server` — Active Directory DNS hostname  
+- `ready` — resolves once the DC has finished bootstrapping; use it in `depends_on`  
+- `sentinel_parameter` — SSM parameter holding the bootstrap status (`null` with `wait_strategy = "sleep"`)  
+
+---
+
+## Sentinel Wait
+
+By default the module sleeps a fixed 300 s before associating the DHCP options,
+whether the DC took two minutes or failed outright. Set
+`wait_strategy = "sentinel"` to wait on the DC's own report instead:
+
+1. Terraform creates the SSM parameter `/mini-ad/<netbios>/status` with the value `pending`.
+2. The bootstrap script writes milestones (`progress:<instance-id>:<stage>`), or
+   `failed:<instance-id>:line N: <command>` if any step aborts.
+3. The script ends in a reboot. On the next boot, `mini-ad-ready.service`
+   waits until Samba answers DNS and LDAP, writes `ready:<instance-id>`,
+   and disables itself.
+4. Terraform polls the parameter and finishes on `ready`, or fails the
+   apply immediately on `failed`, printing the failing line.
+
+Every value carries the instance ID, so a replaced DC is waited on afresh and
+never satisfied by its predecessor's status. Failure messages report the
+command as written (`"$PASSWORD"`), never the expanded value.
+
+Requirements and limits:
+
+- The machine running Terraform needs `bash` and the AWS CLI with
+  `ssm:GetParameter` on the parameter.
+- A failure before the bootstrap installs the AWS CLI cannot be reported;
+  the wait then fails at `sentinel_timeout` instead.
+- `sleep` remains the default and renders the same user-data as before, so
+  existing deployments see no change until they opt in.
 
 ---
 

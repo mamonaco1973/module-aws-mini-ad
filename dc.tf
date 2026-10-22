@@ -46,7 +46,11 @@ resource "aws_instance" "mini_ad_dc_instance" {
     ADMINISTRATOR_PASS = var.ad_admin_password
     ADMIN_USER_PASS    = var.ad_admin_password
     USERS_JSON         = local.effective_users_json
+    SENTINEL_PARAM     = local.sentinel_enabled ? local.sentinel_param : ""
   })
+
+  # The DC overwrites the sentinel parameter, so it must exist first.
+  depends_on = [aws_ssm_parameter.sentinel]
 
   tags = {
     Name = "mini-ad-dc-${lower(var.netbios)}"
@@ -69,11 +73,20 @@ resource "aws_vpc_dhcp_options" "mini_ad_dns" {
 
 # ==================================================================================================
 # Delay to allow the DC to finish provisioning (Samba/DNS up) before associating DHCP options
-# Adjust duration to your bootstrap time; 180s is a conservative lab default
+# Adjust duration to your bootstrap time. Used only with wait_strategy = "sleep";
+# "sentinel" replaces it with sentinel.tf.
 # ==================================================================================================
 resource "time_sleep" "wait_for_mini_ad" {
+  count           = local.sentinel_enabled ? 0 : 1
   depends_on      = [aws_instance.mini_ad_dc_instance]
   create_duration = "300s"
+}
+
+# Keeps existing deployments from replacing (and re-running) the sleep now
+# that it is counted.
+moved {
+  from = time_sleep.wait_for_mini_ad
+  to   = time_sleep.wait_for_mini_ad[0]
 }
 
 # ==================================================================================================
@@ -84,7 +97,7 @@ resource "aws_vpc_dhcp_options_association" "mini_ad_dns_assoc" {
   count           = var.dhcp_update ? 1 : 0
   vpc_id          = var.vpc_id
   dhcp_options_id = aws_vpc_dhcp_options.mini_ad_dns.id
-  depends_on      = [time_sleep.wait_for_mini_ad]
+  depends_on      = [time_sleep.wait_for_mini_ad, terraform_data.wait_for_sentinel]
 }
 
 # ==========================================================================================
