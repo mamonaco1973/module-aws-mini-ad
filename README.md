@@ -100,7 +100,9 @@ terraform apply
 Rather than sleeping a fixed time, the module waits for the DC to report that
 it is actually done - and fails the apply at once if the bootstrap aborts:
 
-1. Terraform creates the SSM parameter `/mini-ad/<netbios>/status` with the value `pending`.
+1. Terraform creates the SSM parameter `/mini-ad/<netbios>/<vpc-id>/status` with the value
+   `pending`. The VPC ID keeps two deployments that reuse a NetBIOS name in different
+   VPCs from sharing one parameter.
 2. The bootstrap script writes milestones (`progress:<instance-id>:<stage>`), or
    `failed:<instance-id>:line N: <command>` if any step aborts.
 3. The script ends in a reboot. On the next boot, `mini-ad-ready.service`

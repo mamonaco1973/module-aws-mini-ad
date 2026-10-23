@@ -18,8 +18,11 @@
 # once. The poller detects that case and passes straight through.
 # ==================================================================================================
 
+# Keyed by VPC as well as domain name: an account can hold several mini-AD
+# domains, and two labs that reuse a NetBIOS name in different VPCs would
+# otherwise share - and clobber - one parameter.
 locals {
-  sentinel_param = "/mini-ad/${var.netbios}/status"
+  sentinel_param = "/mini-ad/${var.netbios}/${var.vpc_id}/status"
 }
 
 resource "aws_ssm_parameter" "sentinel" {
