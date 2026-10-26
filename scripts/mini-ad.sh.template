@@ -74,8 +74,22 @@ fi
 # AWS CLI for the sentinel, from the Snap Store so it doesn't depend on apt:
 # an apt failure below is then reported instead of leaving Terraform waiting.
 # The full CLI v2 is still installed after the packages, for mini-ad-ready.
+# The store can time out (HTTP 408) while the NAT path is new, so retry, and
+# carry on without it rather than abort: sentinel() is a no-op until a CLI
+# exists, and the CLI v2 install below covers every later failure.
 snap wait system seed.loaded
-snap install aws-cli --classic
+snap_cli=false
+for i in {1..10}; do
+  if snap install aws-cli --classic; then
+    snap_cli=true
+    break
+  fi
+  echo "snap install aws-cli failed (attempt $i), retrying in 15s"
+  sleep 15
+done
+if [ "$snap_cli" != true ]; then
+  echo "WARNING: no AWS CLI snap; failures before the CLI v2 install won't be reported"
+fi
 sentinel "progress:$INSTANCE_ID:network-ready"
 
 # Terraform-injected inputs 
