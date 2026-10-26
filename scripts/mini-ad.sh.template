@@ -27,8 +27,8 @@ imds() {
 INSTANCE_ID="$(imds instance-id || echo unknown)"
 SENTINEL_REGION="$(imds placement/region || echo us-east-1)"
 
-# Best effort: the AWS CLI is installed partway through this script, so a
-# failure before that point cannot be reported and Terraform times out.
+# Best effort: needs the AWS CLI, which comes from the Snap Store right after
+# the network check (no apt involved), so later failures are all reported.
 sentinel() {
   command -v aws >/dev/null 2>&1 || return 0
   aws ssm put-parameter --region "$SENTINEL_REGION" --name "$SENTINEL_PARAM" \
@@ -56,15 +56,27 @@ trap 'sentinel_fail "$LINENO" "$BASH_COMMAND"' ERR
 echo "user-data start: $(date -Is)"
 
 # Insure network connectivity
+network_ready=false
 for i in {1..60}; do
   echo "checking network"
   if getent hosts awscli.amazonaws.com >/dev/null 2>&1 && \
      curl -fsS --max-time 5 https://awscli.amazonaws.com/ >/dev/null 2>&1; then
     echo "network ready after $((i*5))s"
+    network_ready=true
     break
   fi
   sleep 5
 done
+if [ "$network_ready" != true ]; then
+  sentinel_fail "$LINENO" "no network after 300s"
+fi
+
+# AWS CLI for the sentinel, from the Snap Store so it doesn't depend on apt:
+# an apt failure below is then reported instead of leaving Terraform waiting.
+# The full CLI v2 is still installed after the packages, for mini-ad-ready.
+snap wait system seed.loaded
+snap install aws-cli --classic
+sentinel "progress:$INSTANCE_ID:network-ready"
 
 # Terraform-injected inputs 
 HOSTNAME_DC="${HOSTNAME_DC}"
@@ -85,7 +97,24 @@ systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
 
 # Packages
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
+
+# apt-get update exits 0 even when every mirror fails ("W: Failed to fetch"),
+# and the install then dies on missing packages. Retry until the lists
+# actually download; the NAT path can be flaky for the first minutes.
+apt_ok=false
+for i in {1..10}; do
+  if apt-get update 2>&1 | tee /tmp/apt-update.log && \
+     ! grep -qE '^(W: Failed to fetch|E: |Err:)' /tmp/apt-update.log; then
+    apt_ok=true
+    break
+  fi
+  echo "apt-get update incomplete (attempt $i), retrying in 15s"
+  sleep 15
+done
+if [ "$apt_ok" != true ]; then
+  sentinel_fail "$LINENO" "apt-get update could not reach the Ubuntu mirrors"
+fi
+
 apt-get install -y \
   samba krb5-user winbind smbclient dnsutils acl attr chrony unzip \
   ldb-tools jq git python3-flask
